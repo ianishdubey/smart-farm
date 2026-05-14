@@ -848,10 +848,15 @@ export default function FinancialAnalytics({ farm }: Props) {
 
   const cropPeriodSummary = useMemo<CropPeriodSummary[]>(() => {
     const summaryMap = new Map<string, CropPeriodSummary>();
+    const periodToCrops = new Map<string, Set<string>>();
 
     filteredPayments.forEach((payment) => {
       const cropName = normalizeCropName(payment.crop_sold || '');
       if (!cropName) return;
+
+      const cropsForPeriod = periodToCrops.get(payment.periodKey) || new Set<string>();
+      cropsForPeriod.add(cropName);
+      periodToCrops.set(payment.periodKey, cropsForPeriod);
 
       const cropKey = cropName.toLowerCase();
       const summaryKey = `${cropKey}-${payment.periodKey}`;
@@ -872,7 +877,17 @@ export default function FinancialAnalytics({ farm }: Props) {
     });
 
     filteredExpenses.forEach((expense) => {
-      const cropName = normalizeCropName(expense.crop_related || '');
+      let cropName = normalizeCropName(expense.crop_related || '');
+
+      // Backward compatibility for older records: if expense has no crop and
+      // exactly one crop was sold in the same period, assign expense to it.
+      if (!cropName) {
+        const cropsForPeriod = periodToCrops.get(expense.periodKey);
+        if (cropsForPeriod && cropsForPeriod.size === 1) {
+          cropName = Array.from(cropsForPeriod)[0];
+        }
+      }
+
       if (!cropName) return;
 
       const cropKey = cropName.toLowerCase();
@@ -948,32 +963,33 @@ export default function FinancialAnalytics({ farm }: Props) {
 
     const rows: SameCropComparisonRow[] = [];
     groupedByCrop.forEach((entries) => {
-      entries.sort((firstEntry, secondEntry) =>
+      const sortedEntries = [...entries].sort((firstEntry, secondEntry) =>
         comparePeriods(
-          firstEntry.season,
-          firstEntry.seasonYear,
           secondEntry.season,
-          secondEntry.seasonYear
+          secondEntry.seasonYear,
+          firstEntry.season,
+          firstEntry.seasonYear
         )
       );
 
-      entries.forEach((entry, index) => {
-        const previousEntry = index > 0 ? entries[index - 1] : null;
-        rows.push({
-          crop: entry.crop,
-          currentSeason: entry.season,
-          currentSeasonYear: entry.seasonYear,
-          currentRevenue: entry.revenue,
-          currentExpenses: entry.expenses,
-          currentProfit: entry.profit,
-          previousSeason: previousEntry?.season ?? null,
-          previousSeasonYear: previousEntry?.seasonYear ?? null,
-          previousRevenue: previousEntry?.revenue ?? null,
-          previousExpenses: previousEntry?.expenses ?? null,
-          previousProfit: previousEntry?.profit ?? null,
-          changeFromPrevious:
-            previousEntry !== null ? entry.profit - previousEntry.profit : null,
-        });
+      const currentEntry = sortedEntries[0];
+      if (!currentEntry) return;
+
+      const previousEntry = sortedEntries[1] || null;
+      rows.push({
+        crop: currentEntry.crop,
+        currentSeason: currentEntry.season,
+        currentSeasonYear: currentEntry.seasonYear,
+        currentRevenue: currentEntry.revenue,
+        currentExpenses: currentEntry.expenses,
+        currentProfit: currentEntry.profit,
+        previousSeason: previousEntry?.season ?? null,
+        previousSeasonYear: previousEntry?.seasonYear ?? null,
+        previousRevenue: previousEntry?.revenue ?? null,
+        previousExpenses: previousEntry?.expenses ?? null,
+        previousProfit: previousEntry?.profit ?? null,
+        changeFromPrevious:
+          previousEntry !== null ? currentEntry.profit - previousEntry.profit : null,
       });
     });
 
